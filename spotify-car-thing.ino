@@ -1,24 +1,12 @@
-/**************************************************************************
-  This is a library for several Adafruit displays based on ST77* drivers.
-
-  Works with the Adafruit ESP32-S2 TFT Feather
-    ----> http://www.adafruit.com/products/5300
-
-  Check out the links above for our tutorials and wiring diagrams.
-
-  Adafruit invests time and resources providing this open source code,
-  please support Adafruit and open-source hardware by purchasing
-  products from Adafruit!
-
-  Written by Limor Fried/Ladyada for Adafruit Industries.
-  MIT license, all text above must be included in any redistribution
- **************************************************************************/
-
+#include <WiFiClientSecure.h>
 #include <WiFi.h>
+// #include <HTTPClient.h>
 #include <Adafruit_GFX.h>     // Core graphics library
 #include <Adafruit_ST7789.h>  // Hardware-specific library for ST7789
 #include <SPI.h>
 #include <secrets.h>
+
+// for secrets setup, look into https://github.com/espired/esp32-spotify-controller
 
 // Use dedicated hardware SPI pins
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
@@ -38,9 +26,32 @@ int previous_d2 = LOW;
 // placeholder variable for button state
 int button_state = 0;
 
+// Initialize the Ethernet client library
+// with the IP address and port of the server
+// that you want to connect to (port 80 is default for HTTP):
+WiFiClientSecure wfcs;
+
+#define SERVER "example.org"
+// #define SERVER "https://accounts.spotify.com"
+#define PATH "/"
+// #define PATH "/api/token"
+
+struct TokenData {
+  String access_token;
+  String refresh_token;
+  int expires_in; // TODO: change this to expires_at, in millis
+};
+
+struct TokenData credentials = {
+  "",
+  REFRESH_TOKEN,
+  0
+};
+
 void setup(void) {
   Serial.begin(115200);
-  Serial.print(F("Hello! Booting up Bootleg Spotify Car Thing"));
+  delay(10);
+  Serial.println(F("Hello! Booting up Bootleg Spotify Car Thing"));
 
   // set input button pins
   pinMode(d0_pin, INPUT_PULLUP);
@@ -75,28 +86,25 @@ void setup(void) {
   Serial.println();
   Serial.print(F("Connecting to WiFi "));
   Serial.println(SSID);
-  drawothertext(SSID);
 
   WiFi.begin(SSID, PASSWORD);
 
   int dot_count = 0;
-  char str_buffer[strlen(SSID) + 4];
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
 
     switch (dot_count) {
       case 0:
-        sprintf(str_buffer, "%s %s", SSID, ".");
+        drawBigText("Wifi  .");
         break;
       case 1:
-        sprintf(str_buffer, "%s %s", SSID, "..");
+        drawBigText("Wifi  ..");
         break;
       default:
-        sprintf(str_buffer, "%s %s", SSID, "...");
+        drawBigText("Wifi  ...");
         break;
     }
-    drawothertext(str_buffer);
 
     dot_count += 1;
     if (dot_count >= 3) {
@@ -107,18 +115,26 @@ void setup(void) {
   // clear screen
   tft.fillScreen(ST77XX_BLACK);
 
+  // don't use a root cert
+  wfcs.setInsecure();
+
+  // log wifi info
+  Serial.println();
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+
+  refresh();
+
+  Serial.println("all set up, nothing more");
 }
 
 void loop() {
-  // check if a button has been pressed
   button_state = digitalRead(d0_pin);
   if (button_state != previous_d0) {
     if (button_state == LOW) {
       // button press
       Serial.println("d0 click");
-      drawothertext("d0");
+      drawBigText("d0");
     } else {
       tft.fillScreen(ST77XX_BLACK);
     }
@@ -130,7 +146,8 @@ void loop() {
     if (button_state == HIGH) {
       // button press
       Serial.println("d1 click");
-      drawothertext("d1");
+      drawBigText("d1");
+      nextSong();
     } else {
       tft.fillScreen(ST77XX_BLACK);
     }
@@ -142,7 +159,7 @@ void loop() {
     if (button_state == HIGH) {
       // button press
       Serial.println("d2 click");
-      drawothertext("d2");
+      drawBigText("d2");
     } else {
       tft.fillScreen(ST77XX_BLACK);
     }
@@ -152,18 +169,12 @@ void loop() {
   delay(50);
 }
 
-void drawothertext(char *text) {
+void drawBigText(char *text) {
   tft.fillScreen(ST77XX_BLACK);
   tft.setCursor(0, 0);
   tft.setTextColor(ST77XX_WHITE);
-  tft.setTextSize(6);
-  tft.print(text);
-}
-
-void testdrawtext(char *text, uint16_t color) {
-  tft.setCursor(0, 0);
-  tft.setTextColor(color);
   tft.setTextWrap(true);
+  tft.setTextSize(6);
   tft.print(text);
 }
 
@@ -232,4 +243,139 @@ void tftPrintTest() {
   tft.print(millis() / 1000);
   tft.setTextColor(ST77XX_WHITE);
   tft.print(" seconds.");
+}
+
+// input: a string like "access_token":"BQAlursFATlCZyadD3rgV-x-4rlqMEdLu0cUd2p2AwETNWFMkAk3DDcnf4v0d8FL7IBx8MlU3ImRYwy0YUivvLzaZjrNjf5AJwNcCXnpo94LCsGPhW57P74PsYBJJxCPV89z9jnGeMc","token_type":"Bearer","expires_in":3600}
+struct TokenData parseTokenPayload(String buffer) {
+  int start = buffer.indexOf("access_token");
+  String access_token = buffer.substring(start + 15);
+  int end = access_token.indexOf("\"");
+  access_token = access_token.substring(0, end);
+
+  start = buffer.indexOf("refresh_token");
+  String refresh_token = credentials.refresh_token;
+  if (start >= 0) {
+    String refresh_token = buffer.substring(start + 16);
+    end = refresh_token.indexOf("\"");
+    refresh_token = refresh_token.substring(0, end);
+  }
+
+  start = buffer.indexOf("expires_in");
+  String expires_in = buffer.substring(start + 12);
+  end = expires_in.indexOf("\"");
+  if (end < 0) {
+    end = expires_in.indexOf("}");
+  }
+  expires_in = expires_in.substring(0, end);
+
+  // TODO: convert expires_in to expires_at
+
+  return { access_token, refresh_token, expires_in.toInt() };
+}
+
+void refresh() {
+  Serial.println("refreshing...");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("refresh() failed: Wifi not connected");
+    return;
+  }
+
+  // can test POST to https://www.httpbin.org/post, but must include a body (add `http.println("key=value");` after `wfcs.println();` and update Content-Length)
+
+  if (wfcs.connect("accounts.spotify.com", 443)) {
+    String params = String("grant_type=refresh_token&client_id=") + CLIENT_ID + "&client_secret=" + CLIENT_SECRET + "&refresh_token=" + credentials.refresh_token;
+
+    wfcs.println("POST /api/token?" + params + " HTTP/1.1");
+    wfcs.println("Host: accounts.spotify.com");
+    wfcs.println("Content-Type: application/x-www-form-urlencoded");
+    wfcs.println("Content-Length: 0");
+    wfcs.println("Connection: keep-alive"); // TODO: is this kosher?
+    wfcs.println();
+
+    int i = 0;
+    int step = 0;
+    char buffer[511];
+    unsigned long startMillis = millis();
+
+    // looking for ['\r','\n',' '] followed by '{', then read everything until '}'
+    while (startMillis + 5000 > millis() && step < 3 && i < 511) {
+      if (wfcs.available()) {
+        char c = wfcs.read();
+
+        if (step == 2) {
+          buffer[i++] = c;
+        }
+
+        switch (step) {
+          case 0:
+            if (c == '\r' || c == '\n' || c == ' ') {
+              step = 1;
+            }
+            break;
+          case 1:
+            if (c == '{') {
+              step = 2;
+            } else {
+              // step = 0;
+            }
+            break;
+          case 2:
+            if (c == '}') {
+              step = 3;
+            }
+            break;
+        }
+      } else {
+        delay(10);
+      }
+    }
+
+    String payload = String(buffer);
+
+    if (step != 3) {
+      Serial.println(payload);
+      Serial.println(i);
+      Serial.println(step);
+      Serial.println("refresh() failed: payload not found");
+      return;
+    }
+
+    credentials = parseTokenPayload(payload);
+
+    return;
+  } else {
+    Serial.println("refresh() failed: couldn't connect");
+  }
+
+  return;
+}
+
+void nextSong() {
+  // POST https://api.spotify.com/v1/me/player/next
+  // Authorization: Bearer credentials.token
+
+  // TODO: refresh token if needed
+
+  Serial.println("next song...");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("nextSong() failed: Wifi not connected");
+    return;
+  }
+
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println("POST /v1/me/player/next HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println("Content-Length: 0");
+    wfcs.println("Connection: keep-alive"); // TODO: is this kosher?
+    wfcs.println();
+
+    // TODO: catch errors?
+  } else {
+    // TODO: but why though?
+    Serial.println("nextSong() failed: couldn't connect");
+  }
 }
