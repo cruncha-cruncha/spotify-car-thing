@@ -290,7 +290,6 @@ void refresh() {
     wfcs.println("Host: accounts.spotify.com");
     wfcs.println("Content-Type: application/x-www-form-urlencoded");
     wfcs.println("Content-Length: 0");
-    wfcs.println("Connection: keep-alive"); // TODO: is this kosher?
     wfcs.println();
 
     int i = 0;
@@ -331,6 +330,7 @@ void refresh() {
       }
     }
 
+    wfcs.stop();
     String payload = String(buffer);
 
     if (step != 3) {
@@ -370,12 +370,10 @@ void nextSong() {
     wfcs.print("Authorization: Bearer ");
     wfcs.println(credentials.access_token);
     wfcs.println("Content-Length: 0");
-    wfcs.println("Connection: keep-alive"); // TODO: is this kosher?
     wfcs.println();
-
-    // TODO: catch errors?
+    // ignore any response
+    wfcs.stop();
   } else {
-    // TODO: but why though?
     Serial.println("nextSong() failed: couldn't connect");
   }
 }
