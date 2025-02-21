@@ -15,8 +15,8 @@
  **************************************************************************/
 
 #include <WiFi.h>
-#include <Adafruit_GFX.h>    // Core graphics library
-#include <Adafruit_ST7789.h> // Hardware-specific library for ST7789
+#include <Adafruit_GFX.h>     // Core graphics library
+#include <Adafruit_ST7789.h>  // Hardware-specific library for ST7789
 #include <SPI.h>
 #include <secrets.h>
 
@@ -40,7 +40,12 @@ int button_state = 0;
 
 void setup(void) {
   Serial.begin(115200);
-  // Serial.print(F("Hello! Feather TFT Test"));
+  Serial.print(F("Hello! Booting up Bootleg Spotify Car Thing"));
+
+  // set input button pins
+  pinMode(d0_pin, INPUT_PULLUP);
+  pinMode(d1_pin, INPUT);
+  pinMode(d2_pin, INPUT);
 
   // turn on backlite
   pinMode(TFT_BACKLITE, OUTPUT);
@@ -52,73 +57,57 @@ void setup(void) {
   delay(10);
 
   // initialize TFT
-  tft.init(135, 240); // Init ST7789 240x135
-  tft.setRotation(3); // use 1 when actually compiling
+  tft.init(135, 240);  // Init ST7789 240x135
+  tft.setRotation(3);  // or 1 if mounted with buttons on the right
   tft.fillScreen(ST77XX_BLACK);
-
-  Serial.println(F("Initialized"));
-
-  // uint16_t time = millis();
-  // tft.fillScreen(ST77XX_BLACK);
-  // time = millis() - time;
-
-  // Serial.println(time, DEC);
-  // delay(500);
-
-  // large block of text
-  tft.fillScreen(ST77XX_BLACK);
-  testdrawtext(
-      "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Curabitur "
-      "adipiscing ante sed nibh tincidunt feugiat. Maecenas enim massa, "
-      "fringilla sed malesuada et, malesuada sit amet turpis. Sed porttitor "
-      "neque ut ante pretium vitae malesuada nunc bibendum. Nullam aliquet "
-      "ultrices massa eu hendrerit. Ut sed nisi lorem. In vestibulum purus a "
-      "tortor imperdiet posuere. ",
-      ST77XX_WHITE);
-  delay(1000);
-
-  // tft print function!
-  tftPrintTest();
-  delay(4000);
-
-  // a single pixel
-  // tft.drawPixel(tft.width() / 2, tft.height() / 2, ST77XX_GREEN);
-  // delay(500);
 
   // optimized lines
   testfastlines(ST77XX_RED, ST77XX_BLUE);
   delay(500);
 
-  testdrawrects(ST77XX_GREEN);
-  delay(500);
-
+  // fancy rectangles
   testfillrects(ST77XX_YELLOW, ST77XX_MAGENTA);
   delay(500);
 
-  Serial.println("done");
-  delay(1000);
-
-  pinMode(d0_pin, INPUT_PULLUP);
-  pinMode(d1_pin, INPUT);
-  pinMode(d2_pin, INPUT);
-
+  // clear screen
   tft.fillScreen(ST77XX_BLACK);
 
   Serial.println();
-  Serial.println("******************************************************");
-  Serial.print("Connecting to ");
+  Serial.print(F("Connecting to WiFi "));
   Serial.println(SSID);
+  drawothertext(SSID);
 
   WiFi.begin(SSID, PASSWORD);
 
+  int dot_count = 0;
+  char str_buffer[strlen(SSID) + 4];
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+
+    switch (dot_count) {
+      case 0:
+        sprintf(str_buffer, "%s %s", SSID, ".");
+        break;
+      case 1:
+        sprintf(str_buffer, "%s %s", SSID, "..");
+        break;
+      default:
+        sprintf(str_buffer, "%s %s", SSID, "...");
+        break;
+    }
+    drawothertext(str_buffer);
+
+    dot_count += 1;
+    if (dot_count >= 3) {
+      dot_count = 0;
+    }
   }
 
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
+  // clear screen
+  tft.fillScreen(ST77XX_BLACK);
+
+  Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 }
 
@@ -233,7 +222,7 @@ void tftPrintTest() {
   tft.print(p, 6);
   tft.println(" Want pi?");
   tft.println(" ");
-  tft.print(8675309, HEX); // print 8,675,309 out in HEX!
+  tft.print(8675309, HEX);  // print 8,675,309 out in HEX!
   tft.println(" Print HEX!");
   tft.println(" ");
   tft.setTextColor(ST77XX_WHITE);
