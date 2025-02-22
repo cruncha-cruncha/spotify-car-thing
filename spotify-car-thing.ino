@@ -4,6 +4,7 @@
 #include <Adafruit_ST7789.h>  // Hardware-specific library for ST7789
 #include <SPI.h>
 #include <secrets.h>
+#include "driver/rtc_io.h"
 
 // Use dedicated hardware SPI pins
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
@@ -47,13 +48,6 @@ struct TokenData credentials = {
 
 void setup(void) {
   Serial.begin(115200);
-  delay(10);
-  Serial.println(F("Hello! Booting up Bootleg Spotify Car Thing"));
-
-  // set input button pins
-  pinMode(d0_pin, INPUT_PULLUP);
-  pinMode(d1_pin, INPUT);
-  pinMode(d2_pin, INPUT);
 
   // turn on backlite
   pinMode(TFT_BACKLITE, OUTPUT);
@@ -80,7 +74,15 @@ void setup(void) {
   // clear screen
   tft.fillScreen(ST77XX_BLACK);
 
+  // hello!
   Serial.println();
+  Serial.println(F("Hello! Booting up Bootleg Spotify Car Thing"));
+
+  // set input button pins
+  pinMode(d0_pin, INPUT_PULLUP);
+  pinMode(d1_pin, INPUT);
+  pinMode(d2_pin, INPUT);
+
   Serial.print(F("Connecting to WiFi "));
   Serial.println(SSID);
 
@@ -131,9 +133,8 @@ void loop() {
     if (button_state == LOW) {
       // button press
       Serial.println("d0 click");
-      drawBigText("d0");
-    } else {
-      tft.fillScreen(ST77XX_BLACK);
+      esp_deep_sleep_start();
+      return;
     }
     previous_d0 = button_state;
   }
