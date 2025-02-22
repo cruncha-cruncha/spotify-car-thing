@@ -1,17 +1,12 @@
 #include <WiFiClientSecure.h>
 #include <WiFi.h>
-// #include <HTTPClient.h>
 #include <Adafruit_GFX.h>     // Core graphics library
 #include <Adafruit_ST7789.h>  // Hardware-specific library for ST7789
 #include <SPI.h>
 #include <secrets.h>
 
-// for secrets setup, look into https://github.com/espired/esp32-spotify-controller
-
 // Use dedicated hardware SPI pins
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
-
-float p = 3.1415926;
 
 // button pins
 const int d0_pin = 0;
@@ -26,28 +21,24 @@ int previous_d2 = LOW;
 // placeholder variable for button state
 int button_state = 0;
 
-// Initialize the Ethernet client library
-// with the IP address and port of the server
-// that you want to connect to (port 80 is default for HTTP):
+// wifi
 WiFiClientSecure wfcs;
 
-#define SERVER "example.org"
-// #define SERVER "https://accounts.spotify.com"
-#define PATH "/"
-// #define PATH "/api/token"
-
+// info for a track
 struct TrackInfo {
+  String id;
   int duration_ms;
   int progress_ms;
-  bool liked;
 };
 
+// info for a token
 struct TokenData {
   String access_token;
   String refresh_token;
-  int expires_at;  // in milliseconds
+  int expires_at;  // milliseconds
 };
 
+// default credentials
 struct TokenData credentials = {
   "",
   REFRESH_TOKEN,
@@ -153,7 +144,7 @@ void loop() {
       // button press
       Serial.println("d1 click");
       drawBigText("d1");
-      nextSong();
+      toggleLiked();
     } else {
       tft.fillScreen(ST77XX_BLACK);
     }
@@ -167,16 +158,14 @@ void loop() {
       Serial.println("d2 click");
       drawBigText("d2");
       struct TrackInfo info = getTrackInfo();
-      // Serial.println(info.duration_ms);
-      // Serial.println(info.progress_ms);
-      seek(info.progress_ms - 16000);
+      seek(info.progress_ms - 16000);  // go back 16 seconds
     } else {
       tft.fillScreen(ST77XX_BLACK);
     }
     previous_d2 = button_state;
   }
 
-  delay(50);
+  delay(50);  // debounce
 }
 
 void drawBigText(char *text) {
@@ -214,45 +203,6 @@ void testfillrects(uint16_t color1, uint16_t color2) {
     tft.drawRect(tft.width() / 2 - x / 2, tft.height() / 2 - x / 2, x, x,
                  color2);
   }
-}
-
-void tftPrintTest() {
-  tft.setTextWrap(false);
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setCursor(0, 30);
-  tft.setTextColor(ST77XX_RED);
-  tft.setTextSize(1);
-  tft.println("Hello World!");
-  tft.setTextColor(ST77XX_YELLOW);
-  tft.setTextSize(2);
-  tft.println("Hello World!");
-  tft.setTextColor(ST77XX_GREEN);
-  tft.setTextSize(3);
-  tft.println("Hello World!");
-  tft.setTextColor(ST77XX_BLUE);
-  tft.setTextSize(4);
-  tft.print(1234.567);
-  delay(1500);
-  tft.setCursor(0, 0);
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setTextSize(0);
-  tft.println("Hello World!");
-  tft.setTextSize(1);
-  tft.setTextColor(ST77XX_GREEN);
-  tft.print(p, 6);
-  tft.println(" Want pi?");
-  tft.println(" ");
-  tft.print(8675309, HEX);  // print 8,675,309 out in HEX!
-  tft.println(" Print HEX!");
-  tft.println(" ");
-  tft.setTextColor(ST77XX_WHITE);
-  tft.println("Sketch has been");
-  tft.println("running for: ");
-  tft.setTextColor(ST77XX_MAGENTA);
-  tft.print(millis() / 1000);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.print(" seconds.");
 }
 
 // input: a string like "access_token":"...","refresh_token":"...","expires_in":3600}
@@ -368,10 +318,10 @@ void refresh_if_expired() {
   }
 }
 
+// this was just for testing
 void nextSong() {
-  refresh_if_expired();
-
   Serial.println("next song...");
+  refresh_if_expired();
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("nextSong() failed: Wifi not connected");
@@ -393,10 +343,9 @@ void nextSong() {
 }
 
 struct TrackInfo getTrackInfo() {
-  refresh_if_expired();
-  struct TrackInfo err_resp = { 0, 0, false };
-
   Serial.println("track info...");
+  refresh_if_expired();
+  struct TrackInfo err_resp = { "", 0, 0 };
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("trackInfo() failed: Wifi not connected");
@@ -410,16 +359,126 @@ struct TrackInfo getTrackInfo() {
     wfcs.println(credentials.access_token);
     wfcs.println();
 
-    // { "progress_ms": 10824, "item": {"duration_ms": 162120}}
+    int step_id = 0;
     int step_pm = 0;
     int step_dm = 0;
+    String id = "";
     String progress_ms = "";
     String duration_ms = "";
     unsigned long startMillis = millis();
+    int count = 0;
 
-    while (startMillis + 5000 > millis() && step_pm >= 0 && step_dm >= 0) {
+    while (startMillis + 5000 > millis() && (step_id >= 0 || step_pm >= 0 || step_dm >= 0)) {
       while (wfcs.available()) {
         char c = wfcs.read();
+
+        // FSMs go brrrrrr, but for real these could break at any time
+        // There are multiple instances of "id" in the response, so cheat and look for com/v1/tracks/..." instead (part of the href)
+        switch (step_id) {
+          case 0:
+            if (c == 'c') {
+              step_id = 1;
+            }
+            break;
+          case 1:
+            if (c == 'o') {
+              step_id = 2;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 2:
+            if (c == 'm') {
+              step_id = 3;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 3:
+            if (c == '/') {
+              step_id = 4;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 4:
+            if (c == 'v') {
+              step_id = 5;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 5:
+            if (c == '1') {
+              step_id = 6;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 6:
+            if (c == '/') {
+              step_id = 7;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 7:
+            if (c == 't') {
+              step_id = 8;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 8:
+            if (c == 'r') {
+              step_id = 9;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 9:
+            if (c == 'a') {
+              step_id = 10;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 10:
+            if (c == 'c') {
+              step_id = 11;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 11:
+            if (c == 'k') {
+              step_id = 12;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 12:
+            if (c == 's') {
+              step_id = 13;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 13:
+            if (c == '/') {
+              step_id = 14;
+            } else {
+              step_id = 0;
+            }
+            break;
+          case 14:
+            if (c == '"') {
+              step_id = -1;
+            } else {
+              id += c;
+            }
+            break;
+        }
 
         switch (step_pm) {
           case 0:
@@ -634,7 +693,8 @@ struct TrackInfo getTrackInfo() {
     }
 
     wfcs.stop();
-    return { duration_ms.toInt(), progress_ms.toInt(), false };
+
+    return { id, duration_ms.toInt(), progress_ms.toInt() };
   } else {
     Serial.println("trackInfo() failed: couldn't connect");
   }
@@ -643,13 +703,13 @@ struct TrackInfo getTrackInfo() {
 }
 
 void seek(int ms) {
-  if (ms < 0) {
-    return;
-  }
-
+  Serial.print("seek ");
+  Serial.print(ms);
+  Serial.println("...");
   refresh_if_expired();
-
-  Serial.println("seek...");
+  if (ms < 0) {
+    ms = 0;
+  }
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("seek() failed: Wifi not connected");
@@ -665,10 +725,117 @@ void seek(int ms) {
     wfcs.println();
     // ignore any response
 
-    Serial.println(credentials.access_token);
-
     wfcs.stop();
   } else {
     Serial.println("nextSong() failed: couldn't connect");
+  }
+}
+
+void toggleLiked() {
+  Serial.println("toggle liked...");
+
+  // get current track (getTrackInfo())
+  struct TrackInfo info = getTrackInfo();
+  if (info.id == "") {
+    Serial.println("toggleLiked() failed: no track id");
+    return;
+  }
+
+  bool alreadyLiked = false;
+  // check user's saved tracks (GET https://api.spotify.com/v1/me/tracks/contains?ids=...)
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println(String("GET /v1/me/tracks/contains?ids=") + info.id + " HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println("Content-Length: 0");
+    wfcs.println();
+
+    // response is an array of booleans
+    // Example: [false,true]
+
+    int step_bool = 0;
+    unsigned long startMillis = millis();
+    while (startMillis + 5000 > millis() && step_bool >= 0) {
+      while (wfcs.available()) {
+        char c = wfcs.read();
+
+        switch (step_bool) {
+          case 0:
+            if (c == '\r') {
+              step_bool = 1;
+            }
+            break;
+          case 1:
+            if (c == '\n') {
+              step_bool = 2;
+            } else {
+              step_bool = 0;
+            }
+            break;
+          case 2:
+            if (c == '\r') {
+              step_bool = 3;
+            } else {
+              step_bool = 0;
+            }
+            break;
+          case 3:
+            if (c == '\n') {
+              step_bool = 4;
+            } else {
+              step_bool = 0;
+            }
+            break;
+          case 4:
+            if (c == '[') {
+              step_bool = 5;
+            } else {
+              step_bool = 0;
+            }
+            break;
+          case 5:
+            if (c == 't') {
+              alreadyLiked = true;
+            } else if (c == 'f') {
+              alreadyLiked = false;
+            }
+            step_bool = -1;
+            break;
+        }
+      }
+    }
+
+    wfcs.stop();
+  } else {
+    Serial.println("toggleLiked() failed: couldn't connect (0)");
+  }
+
+  if (alreadyLiked) {
+    if (wfcs.connect("api.spotify.com", 443)) {
+      wfcs.println(String("DELETE /v1/me/tracks?ids=") + info.id + " HTTP/1.1");
+      wfcs.println("Host: api.spotify.com");
+      wfcs.print("Authorization: Bearer ");
+      wfcs.println(credentials.access_token);
+      wfcs.println("Content-Length: 0");
+      wfcs.println();
+      // ignore response
+      wfcs.stop();
+    } else {
+      Serial.println("toggleLiked() failed: couldn't connect (1)");
+    }
+  } else {
+    if (wfcs.connect("api.spotify.com", 443)) {
+      wfcs.println(String("PUT /v1/me/tracks?ids=") + info.id + " HTTP/1.1");
+      wfcs.println("Host: api.spotify.com");
+      wfcs.print("Authorization: Bearer ");
+      wfcs.println(credentials.access_token);
+      wfcs.println("Content-Length: 0");
+      wfcs.println();
+      // ignore response
+      wfcs.stop();
+    } else {
+      Serial.println("toggleLiked() failed: couldn't connect (2)");
+    }
   }
 }
