@@ -10,7 +10,7 @@
 #define CLIENT_ID ""
 #define CLIENT_SECRET ""
 
-// paste your ClientId into this URL: `https://accounts.spotify.com/authorize?client_id=<ClientID>&response_type=code&redirect_uri=http://localhost&scope=user-read-playback-state%20user-modify-playback-state`
+// paste your ClientId into this URL: `https://accounts.spotify.com/authorize?client_id=<ClientID>&response_type=code&redirect_uri=http://localhost&scope=user-read-playback-state%20user-modify-playback-state%20user-library-read%20user-library-modify`
 // visit that URL in the browser, follow the directions (we're replicating Spotify's Authorization Code Flow) 
 // it should bring you to a http://localhost page that doesn't load, but the new URL should have a 'code' param, copy that
 // Use Postman or Insomnia to make a call to `https://accounts.spotify.com/api/token` with the header `Content-type: application/x-www-form-urlencoded` and following body:
@@ -27,6 +27,6 @@
 
 #define REFRESH_TOKEN ""
 
-//  (Spotify instructions copied from https://github.com/espired/esp32-spotify-controller)
+//  (Spotify instructions copied from https://github.com/espired/esp32-spotify-controller, then modified)
 
 
