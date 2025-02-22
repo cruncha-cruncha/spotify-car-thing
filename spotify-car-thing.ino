@@ -36,10 +36,16 @@ WiFiClientSecure wfcs;
 #define PATH "/"
 // #define PATH "/api/token"
 
+struct TrackInfo {
+  int duration_ms;
+  int progress_ms;
+  bool liked;
+};
+
 struct TokenData {
   String access_token;
   String refresh_token;
-  int expires_in; // TODO: change this to expires_at, in millis
+  int expires_at;  // in milliseconds
 };
 
 struct TokenData credentials = {
@@ -160,6 +166,10 @@ void loop() {
       // button press
       Serial.println("d2 click");
       drawBigText("d2");
+      struct TrackInfo info = getTrackInfo();
+      // Serial.println(info.duration_ms);
+      // Serial.println(info.progress_ms);
+      seek(info.progress_ms - 16000);
     } else {
       tft.fillScreen(ST77XX_BLACK);
     }
@@ -245,7 +255,7 @@ void tftPrintTest() {
   tft.print(" seconds.");
 }
 
-// input: a string like "access_token":"BQAlursFATlCZyadD3rgV-x-4rlqMEdLu0cUd2p2AwETNWFMkAk3DDcnf4v0d8FL7IBx8MlU3ImRYwy0YUivvLzaZjrNjf5AJwNcCXnpo94LCsGPhW57P74PsYBJJxCPV89z9jnGeMc","token_type":"Bearer","expires_in":3600}
+// input: a string like "access_token":"...","refresh_token":"...","expires_in":3600}
 struct TokenData parseTokenPayload(String buffer) {
   int start = buffer.indexOf("access_token");
   String access_token = buffer.substring(start + 15);
@@ -268,9 +278,10 @@ struct TokenData parseTokenPayload(String buffer) {
   }
   expires_in = expires_in.substring(0, end);
 
-  // TODO: convert expires_in to expires_at
+  // expires at now + expires_in - 5 minutes
+  int expires_at = millis() + (expires_in.toInt() * 1000) - 300000;
 
-  return { access_token, refresh_token, expires_in.toInt() };
+  return { access_token, refresh_token, expires_at };
 }
 
 void refresh() {
@@ -351,11 +362,14 @@ void refresh() {
   return;
 }
 
-void nextSong() {
-  // POST https://api.spotify.com/v1/me/player/next
-  // Authorization: Bearer credentials.token
+void refresh_if_expired() {
+  if (credentials.expires_at < millis()) {
+    refresh();
+  }
+}
 
-  // TODO: refresh token if needed
+void nextSong() {
+  refresh_if_expired();
 
   Serial.println("next song...");
 
@@ -372,6 +386,287 @@ void nextSong() {
     wfcs.println("Content-Length: 0");
     wfcs.println();
     // ignore any response
+    wfcs.stop();
+  } else {
+    Serial.println("nextSong() failed: couldn't connect");
+  }
+}
+
+struct TrackInfo getTrackInfo() {
+  refresh_if_expired();
+  struct TrackInfo err_resp = { 0, 0, false };
+
+  Serial.println("track info...");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("trackInfo() failed: Wifi not connected");
+    return err_resp;
+  }
+
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println("GET /v1/me/player/currently-playing HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println();
+
+    // { "progress_ms": 10824, "item": {"duration_ms": 162120}}
+    int step_pm = 0;
+    int step_dm = 0;
+    String progress_ms = "";
+    String duration_ms = "";
+    unsigned long startMillis = millis();
+
+    while (startMillis + 5000 > millis() && step_pm >= 0 && step_dm >= 0) {
+      while (wfcs.available()) {
+        char c = wfcs.read();
+
+        switch (step_pm) {
+          case 0:
+            if (c == '"') {
+              step_pm = 1;
+            }
+            break;
+          case 1:
+            if (c == 'p') {
+              step_pm = 2;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 2:
+            if (c == 'r') {
+              step_pm = 3;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 3:
+            if (c == 'o') {
+              step_pm = 4;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 4:
+            if (c == 'g') {
+              step_pm = 5;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 5:
+            if (c == 'r') {
+              step_pm = 6;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 6:
+            if (c == 'e') {
+              step_pm = 7;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 7:
+            if (c == 's') {
+              step_pm = 8;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 8:
+            if (c == 's') {
+              step_pm = 9;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 9:
+            if (c == '_') {
+              step_pm = 10;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 10:
+            if (c == 'm') {
+              step_pm = 11;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 11:
+            if (c == 's') {
+              step_pm = 12;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 12:
+            if (c == '"') {
+              step_pm = 13;
+            } else {
+              step_pm = 0;
+            }
+            break;
+          case 13:
+            if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
+              progress_ms += c;
+              step_pm = 14;
+            }
+            break;
+          case 14:
+            if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
+              progress_ms += c;
+            } else {
+              step_pm = -1;
+            }
+            break;
+        }
+
+        switch (step_dm) {
+          case 0:
+            if (c == '"') {
+              step_dm = 1;
+            }
+            break;
+          case 1:
+            if (c == 'd') {
+              step_dm = 2;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 2:
+            if (c == 'u') {
+              step_dm = 3;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 3:
+            if (c == 'r') {
+              step_dm = 4;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 4:
+            if (c == 'a') {
+              step_dm = 5;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 5:
+            if (c == 't') {
+              step_dm = 6;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 6:
+            if (c == 'i') {
+              step_dm = 7;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 7:
+            if (c == 'o') {
+              step_dm = 8;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 8:
+            if (c == 'n') {
+              step_dm = 9;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 9:
+            if (c == '_') {
+              step_dm = 10;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 10:
+            if (c == 'm') {
+              step_dm = 11;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 11:
+            if (c == 's') {
+              step_dm = 12;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 12:
+            if (c == '"') {
+              step_dm = 13;
+            } else {
+              step_dm = 0;
+            }
+            break;
+          case 13:
+            if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
+              duration_ms += c;
+              step_dm = 14;
+            }
+            break;
+          case 14:
+            if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
+              duration_ms += c;
+            } else {
+              step_dm = -1;
+            }
+            break;
+        }
+      }
+    }
+
+    wfcs.stop();
+    return { duration_ms.toInt(), progress_ms.toInt(), false };
+  } else {
+    Serial.println("trackInfo() failed: couldn't connect");
+  }
+
+  return err_resp;
+}
+
+void seek(int ms) {
+  if (ms < 0) {
+    return;
+  }
+
+  refresh_if_expired();
+
+  Serial.println("seek...");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("seek() failed: Wifi not connected");
+    return;
+  }
+
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println(String("PUT /v1/me/player/seek?position_ms=") + String(ms) + " HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println("Content-Length: 0");
+    wfcs.println();
+    // ignore any response
+
+    Serial.println(credentials.access_token);
+
     wfcs.stop();
   } else {
     Serial.println("nextSong() failed: couldn't connect");
