@@ -16,3 +16,6 @@ The board has three buttons. I've decided to use them as follows:
 
 ## Setup
 Please see secrets.example.h
+
+## Notes
+I am not a C++, Ardunio, nor embedded developer. This code is some horrible abomination of Object Oriented and Procedural.
