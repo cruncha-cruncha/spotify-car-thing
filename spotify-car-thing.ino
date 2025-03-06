@@ -35,6 +35,9 @@ int previous_blue = LOW;
 int previous_green = LOW;
 int previous_yellow = LOW;
 
+// rotary encoder rotation direction detection
+int renc_rot_status = 0;
+
 // placeholder variable for button state
 int button_state = 0;
 
@@ -44,11 +47,17 @@ void setup(void) {
   Serial.println("Hello! Booting up Bootleg Spotify Car Thing (core 0)");
 
   // set input button pins
+  pinMode(RENC_A, INPUT_PULLUP);
+  pinMode(RENC_B, INPUT_PULLUP);
   pinMode(RENC_PIN, INPUT_PULLUP);
   pinMode(BLUE_PIN, INPUT_PULLUP);
   pinMode(GREEN_PIN, INPUT_PULLUP);
   pinMode(YELLOW_PIN, INPUT_PULLUP);
   pinMode(RED_PIN, INPUT_PULLUP);
+
+  // quadtrature encoders are sensitive, they need interrupts for proper detection?
+  attachInterrupt(RENC_A, handleChangeA, CHANGE);
+  attachInterrupt(RENC_B, handleChangeB, CHANGE);
 
   Serial.println("core 0 all set up");
 }
@@ -57,7 +66,6 @@ void loop() {
   button_state = digitalRead(RENC_PIN);
   if (button_state != previous_renc) {
     if (button_state == LOW) {
-      // button is pressed
       DEBUG_PRINTLN("renc click, core 0");
       rp2040.fifo.push(1);
     }
@@ -107,6 +115,98 @@ void loop() {
   delay(50);  // debounce
 }
 
+void handleChangeA() {
+  button_state = digitalRead(RENC_A);
+  if (button_state == HIGH) {
+    switch (renc_rot_status) {
+      case 0:
+        renc_rot_status = 1;
+        break;
+      case 2:
+        renc_rot_status = 4;
+        rp2040.fifo.push(8);
+        break;
+      case 1:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+      case 7:
+      case 8:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  } else {
+    switch (renc_rot_status) {
+      case 1:
+      case 6:
+      case 7:
+        renc_rot_status = 0;
+        break;
+      case 3:
+        renc_rot_status = 5;
+        break;
+      case 4:
+        renc_rot_status = 8;
+        break;
+      case 0:
+      case 2:
+      case 5:
+      case 8:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  }
+}
+
+void handleChangeB() {
+  button_state = digitalRead(RENC_B);
+  if (button_state == HIGH) {
+    switch (renc_rot_status) {
+      case 0:
+        renc_rot_status = 2;
+        break;
+      case 1:
+        renc_rot_status = 3;
+        rp2040.fifo.push(9);
+        break;
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+      case 7:
+      case 8:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  } else {
+    switch (renc_rot_status) {
+      case 2:
+      case 5:
+      case 8:
+        renc_rot_status = 0;
+        break;
+      case 3:
+        renc_rot_status = 7;
+        break;
+      case 4:
+        renc_rot_status = 6;
+        break;
+      case 0:
+      case 1:
+      case 6:
+      case 7:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Everything below should ONLY be accessed from core 1
 // -----------------------------------------------------------------------------
@@ -136,6 +236,7 @@ struct TokenData credentials = { "", REFRESH_TOKEN, 0 };
 
 // buffers for fifo communication from core 0
 int renc_click_buffer = 0;
+int rotation_buffer = 0;
 int blue_click_buffer = 0;
 int green_click_buffer = 0;
 int yellow_click_buffer = 0;
@@ -166,6 +267,20 @@ void loop1() {
 
   bool got_track = false;
 
+  if (renc_click_buffer % 2 == 1) {
+    setVolume(0);
+  }
+
+  if (rotation_buffer != 0) {
+    if (!got_track) {
+      getCurrentTrackInfo();
+      got_track = true;
+    }
+    update_fifo_bufs();
+    // if positive, then rotated cw -> turn volume up
+    // if negative, then rotated ccw -> turn volume down
+  }
+
   if (blue_click_buffer > 0) {
     if (!got_track) {
       getCurrentTrackInfo();
@@ -176,12 +291,22 @@ void loop1() {
     seek(info.progress_ms - skip_back);
   }
 
+  if (green_click_buffer > 0) {
+    if (!got_track) {
+      getCurrentTrackInfo();
+      got_track = true;
+    }
+    update_fifo_bufs();
+    likeTrack();
+  }
+
   if (yellow_click_buffer > 0) {
     reconnectWifi();
     refresh();
   }
 
   renc_click_buffer = 0;
+  rotation_buffer = 0;
   blue_click_buffer = 0;
   green_click_buffer = 0;
   yellow_click_buffer = 0;
@@ -209,11 +334,11 @@ void update_fifo_bufs() {
       case 5:
         red_click_buffer += 1;
         break;
-      case 6:
-        // encoder A
+      case 8:
+        rotation_buffer -= 1;
         break;
-      case 7:
-        // encoder B
+      case 9:
+        rotation_buffer += 1;
         break;
     }
   }
@@ -370,7 +495,7 @@ void getCurrentTrackInfo() {
   DEBUG_PRINTLN("track info...");
 
   if (WiFi.status() != WL_CONNECTED) {
-    DEBUG_PRINTLN("trackInfo() failed: Wifi not connected");
+    DEBUG_PRINTLN("getCurrentTrackInfo() failed: Wifi not connected");
     info.id = "";
     return;
   }
@@ -726,7 +851,7 @@ void getCurrentTrackInfo() {
     info.duration_ms = track_duration_ms.toInt();
     info.progress_ms = track_progress_ms.toInt();
   } else {
-    DEBUG_PRINTLN("trackInfo() failed: couldn't connect");
+    DEBUG_PRINTLN("getCurrentTrackInfo() failed: couldn't connect");
   }
 
   info.id = 0;
@@ -780,7 +905,7 @@ bool trackAlreadyLiked() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    DEBUG_PRINTLN("seek() failed: Wifi not connected");
+    DEBUG_PRINTLN("trackAlreadyLiked() failed: Wifi not connected");
     return false;
   }
 
@@ -869,7 +994,7 @@ void unlikeTrack() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    DEBUG_PRINTLN("seek() failed: Wifi not connected");
+    DEBUG_PRINTLN("unlikeTrack() failed: Wifi not connected");
     return;
   }
 
@@ -898,6 +1023,13 @@ void likeTrack() {
     return;
   }
 
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("likeTrack() failed: Wifi not connected");
+    return;
+  }
+
+  refresh_if_expired();
+
   if (wfcs.connect("api.spotify.com", 443)) {
     wfcs.println(String("PUT /v1/me/tracks?ids=") + info.id + " HTTP/1.1");
     wfcs.println("Host: api.spotify.com");
@@ -911,3 +1043,50 @@ void likeTrack() {
     DEBUG_PRINTLN("likeTrack() failed: couldn't connect (2)");
   }
 }
+
+// set playback volume
+void setVolume(int vp) {
+  DEBUG_PRINT("set volume ");
+  DEBUG_PRINT(vp);
+  DEBUG_PRINTLN("...");
+
+  if (vp < 0) {
+    vp = 0;
+  } else if (vp > 100) {
+    vp = 100;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("setVolume() failed: Wifi not connected");
+    return;
+  }
+
+  refresh_if_expired();
+
+  // :(
+  /*
+  {
+    "error": {
+        "status": 403,
+        "message": "Player command failed: Cannot control device volume",
+        "reason": "VOLUME_CONTROL_DISALLOW"
+    }
+  }
+  */
+
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println(String("PUT /v1/me/player/volume?volume_percent=") + vp + " HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println("Content-Length: 0");
+    wfcs.println();
+    // ignore response
+    wfcs.stop();
+  } else {
+    DEBUG_PRINTLN("setVolume() failed: couldn't connect (2)");
+  }
+}
+
+// can get current volume from playback state
+// https://api.spotify.com/v1/me/player
