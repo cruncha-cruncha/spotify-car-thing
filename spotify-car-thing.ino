@@ -491,6 +491,7 @@ void refresh_if_expired() {
 // get info related to the currently playing track (if any)
 void getCurrentTrackInfo() {
   static char track_id_buf[MAX_TRACK_ID_LENGTH];
+  memset(track_id_buf, 0, MAX_TRACK_ID_LENGTH);
 
   DEBUG_PRINTLN("track info...");
 
@@ -850,11 +851,11 @@ void getCurrentTrackInfo() {
     info.id = track_id_buf;
     info.duration_ms = track_duration_ms.toInt();
     info.progress_ms = track_progress_ms.toInt();
+    return;
   } else {
     DEBUG_PRINTLN("getCurrentTrackInfo() failed: couldn't connect");
   }
 
-  info.id = 0;
   return;
 }
 
