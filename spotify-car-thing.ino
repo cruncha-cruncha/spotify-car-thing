@@ -1,258 +1,434 @@
 #include <WiFiClientSecure.h>
 #include <WiFi.h>
-#include <Adafruit_GFX.h>     // Core graphics library
-#include <Adafruit_ST7789.h>  // Hardware-specific library for ST7789
-#include <SPI.h>
-#include <secrets.h>
-#include "driver/rtc_io.h"
+#include "secrets.h"
 
-// Use dedicated hardware SPI pins
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+// RENC stands for Rotary ENCoder
+#define RENC_PIN 16
+#define RENC_A 14
+#define RENC_B 15
+#define RED_PIN 5
+#define BLUE_PIN 28
+#define GREEN_PIN 3
+#define YELLOW_PIN 18
 
-// button pins
-const int d0_pin = 0;
-const int d1_pin = 1;
-const int d2_pin = 2;
+// for allocating static char buffers
+#define MAX_TOKEN_LENGTH 1024
+#define MAX_TRACK_ID_LENGTH 256
+
+// debugging
+#define DEBUG
+#ifdef DEBUG
+#define DEBUG_PRINTLN(x) Serial.println(x)
+#define DEBUG_PRINT(x) Serial.print(x)
+#else
+#define DEBUG_PRINTLN(x)
+#define DEBUG_PRINT(x)
+#endif
+
+// give each core a full 8K stack
+bool core1_separate_stack = true;
 
 // detect state change of button values by comparing to previous
-int previous_d0 = HIGH;
-int previous_d1 = LOW;
-int previous_d2 = LOW;
+int previous_renc = LOW;
+int previous_red = LOW;
+int previous_blue = LOW;
+int previous_green = LOW;
+int previous_yellow = LOW;
+
+// rotary encoder rotation direction detection
+int renc_rot_status = 0;
 
 // placeholder variable for button state
 int button_state = 0;
+
+void setup(void) {
+  Serial.begin(115200);
+  Serial.println();
+  Serial.println("Hello! Booting up Bootleg Spotify Car Thing (core 0)");
+
+  // set input button pins
+  pinMode(RENC_A, INPUT_PULLUP);
+  pinMode(RENC_B, INPUT_PULLUP);
+  pinMode(RENC_PIN, INPUT_PULLUP);
+  pinMode(BLUE_PIN, INPUT_PULLUP);
+  pinMode(GREEN_PIN, INPUT_PULLUP);
+  pinMode(YELLOW_PIN, INPUT_PULLUP);
+  pinMode(RED_PIN, INPUT_PULLUP);
+
+  // quadtrature encoders are sensitive, they need interrupts for proper detection?
+  attachInterrupt(RENC_A, handleChangeA, CHANGE);
+  attachInterrupt(RENC_B, handleChangeB, CHANGE);
+
+  Serial.println("core 0 all set up");
+}
+
+void loop() {
+  button_state = digitalRead(RENC_PIN);
+  if (button_state != previous_renc) {
+    if (button_state == LOW) {
+      DEBUG_PRINTLN("renc click, core 0");
+      rp2040.fifo.push(1);
+    }
+    previous_renc = button_state;
+  }
+
+  button_state = digitalRead(BLUE_PIN);
+  if (button_state != previous_blue) {
+    if (button_state == LOW) {
+      DEBUG_PRINTLN("blue click, core 0");
+      rp2040.fifo.push(2);
+    }
+    previous_blue = button_state;
+  }
+
+  button_state = digitalRead(GREEN_PIN);
+  if (button_state != previous_green) {
+    if (button_state == LOW) {
+      DEBUG_PRINTLN("green click, core 0");
+      rp2040.fifo.push(3);
+    }
+    previous_green = button_state;
+  }
+
+  button_state = digitalRead(YELLOW_PIN);
+  if (button_state != previous_yellow) {
+    if (button_state == HIGH) {
+      digitalWrite(LED_BUILTIN, LOW);
+    } else {
+      digitalWrite(LED_BUILTIN, HIGH);
+      DEBUG_PRINTLN("yellow click, core 0");
+      rp2040.fifo.push(4);
+    }
+    previous_yellow = button_state;
+  }
+
+  button_state = digitalRead(RED_PIN);
+  if (button_state != previous_red) {
+    if (button_state == LOW) {
+      DEBUG_PRINTLN("red click, core 0");
+      // rp2040.fifo.push(5);
+      rp2040.reboot();
+    }
+    previous_red = button_state;
+  }
+
+  delay(50);  // debounce
+}
+
+void handleChangeA() {
+  button_state = digitalRead(RENC_A);
+  if (button_state == HIGH) {
+    switch (renc_rot_status) {
+      case 0:
+        renc_rot_status = 1;
+        break;
+      case 2:
+        renc_rot_status = 4;
+        rp2040.fifo.push(8);
+        break;
+      case 1:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+      case 7:
+      case 8:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  } else {
+    switch (renc_rot_status) {
+      case 1:
+      case 6:
+      case 7:
+        renc_rot_status = 0;
+        break;
+      case 3:
+        renc_rot_status = 5;
+        break;
+      case 4:
+        renc_rot_status = 8;
+        break;
+      case 0:
+      case 2:
+      case 5:
+      case 8:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  }
+}
+
+void handleChangeB() {
+  button_state = digitalRead(RENC_B);
+  if (button_state == HIGH) {
+    switch (renc_rot_status) {
+      case 0:
+        renc_rot_status = 2;
+        break;
+      case 1:
+        renc_rot_status = 3;
+        rp2040.fifo.push(9);
+        break;
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+      case 7:
+      case 8:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  } else {
+    switch (renc_rot_status) {
+      case 2:
+      case 5:
+      case 8:
+        renc_rot_status = 0;
+        break;
+      case 3:
+        renc_rot_status = 7;
+        break;
+      case 4:
+        renc_rot_status = 6;
+        break;
+      case 0:
+      case 1:
+      case 6:
+      case 7:
+        break;
+      default:
+        renc_rot_status = 0;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Everything below should ONLY be accessed from core 1
+// -----------------------------------------------------------------------------
 
 // wifi
 WiFiClientSecure wfcs;
 
 // info for a track
 struct TrackInfo {
-  String id;
+  const char* id;
   int duration_ms;
   int progress_ms;
 };
 
+// default track info
+struct TrackInfo info = { "", 0, 0 };
+
 // info for a token
 struct TokenData {
-  String access_token;
-  String refresh_token;
+  const char* access_token;
+  const char* refresh_token;
   int expires_at;  // milliseconds
 };
 
 // default credentials
-struct TokenData credentials = {
-  "",
-  REFRESH_TOKEN,
-  0
-};
+struct TokenData credentials = { "", REFRESH_TOKEN, 0 };
 
-void setup(void) {
-  Serial.begin(115200);
+// buffers for fifo communication from core 0
+int renc_click_buffer = 0;
+int rotation_buffer = 0;
+int blue_click_buffer = 0;
+int green_click_buffer = 0;
+int yellow_click_buffer = 0;
+int red_click_buffer = 0;
 
-  // turn on backlite
-  pinMode(TFT_BACKLITE, OUTPUT);
-  digitalWrite(TFT_BACKLITE, HIGH);
+// for use with getCurrentTrackInfo()
+String track_id = "";
+String track_progress_ms = "";
+String track_duration_ms = "";
 
-  // turn on the TFT / I2C power supply
-  pinMode(TFT_I2C_POWER, OUTPUT);
-  digitalWrite(TFT_I2C_POWER, HIGH);
-  delay(10);
+void setup1() {
+  delay(200);
+  Serial.println("Hello! Booting up Bootleg Spotify Car Thing (core 1)");
 
-  // initialize TFT
-  tft.init(135, 240);  // Init ST7789 240x135
-  tft.setRotation(3);  // or 1 if mounted with buttons on the right
-  tft.fillScreen(ST77XX_BLACK);
+  track_id.reserve(64);
+  track_progress_ms.reserve(16);
+  track_duration_ms.reserve(16);
 
-  // optimized lines
-  testfastlines(ST77XX_RED, ST77XX_BLUE);
-  delay(500);
+  DEBUG_PRINTLN("core 1 all set up");
+}
 
-  // fancy rectangles
-  testfillrects(ST77XX_YELLOW, ST77XX_MAGENTA);
-  delay(500);
-
-  // clear screen
-  tft.fillScreen(ST77XX_BLACK);
-
-  // hello!
-  Serial.println();
-  Serial.println(F("Hello! Booting up Bootleg Spotify Car Thing"));
-
-  // set input button pins
-  pinMode(d0_pin, INPUT_PULLUP);
-  pinMode(d1_pin, INPUT);
-  pinMode(d2_pin, INPUT);
-
-  Serial.print(F("Connecting to WiFi "));
-  Serial.println(SSID);
-
-  WiFi.begin(SSID, PASSWORD);
-
-  int dot_count = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-
-    switch (dot_count) {
-      case 0:
-        drawBigText("Wifi  .");
-        break;
-      case 1:
-        drawBigText("Wifi  ..");
-        break;
-      default:
-        drawBigText("Wifi  ...");
-        break;
-    }
-
-    dot_count += 1;
-    if (dot_count >= 3) {
-      dot_count = 0;
-    }
+void loop1() {
+  while (rp2040.fifo.available() <= 0) {
+    delay(40);
   }
 
-  // clear screen
-  tft.fillScreen(ST77XX_BLACK);
+  update_fifo_bufs();
+
+  bool got_track = false;
+
+  if (renc_click_buffer % 2 == 1) {
+    setVolume(0);
+  }
+
+  if (rotation_buffer != 0) {
+    if (!got_track) {
+      getCurrentTrackInfo();
+      got_track = true;
+    }
+    update_fifo_bufs();
+    // if positive, then rotated cw -> turn volume up
+    // if negative, then rotated ccw -> turn volume down
+  }
+
+  if (blue_click_buffer > 0) {
+    if (!got_track) {
+      getCurrentTrackInfo();
+      got_track = true;
+    }
+    update_fifo_bufs();
+    int skip_back = 16000 * blue_click_buffer;
+    seek(info.progress_ms - skip_back);
+  }
+
+  if (green_click_buffer > 0) {
+    if (!got_track) {
+      getCurrentTrackInfo();
+      got_track = true;
+    }
+    update_fifo_bufs();
+    likeTrack();
+  }
+
+  if (yellow_click_buffer > 0) {
+    reconnectWifi();
+    refresh();
+  }
+
+  renc_click_buffer = 0;
+  rotation_buffer = 0;
+  blue_click_buffer = 0;
+  green_click_buffer = 0;
+  yellow_click_buffer = 0;
+  red_click_buffer = 0;
+}
+
+// read from inter-core fifo, update all x_click_buffer variables
+void update_fifo_bufs() {
+  int msg;
+  while (rp2040.fifo.available() > 0) {
+    msg = rp2040.fifo.pop();
+    switch (msg) {
+      case 1:
+        renc_click_buffer += 1;
+        break;
+      case 2:
+        blue_click_buffer += 1;
+        break;
+      case 3:
+        green_click_buffer += 1;
+        break;
+      case 4:
+        yellow_click_buffer += 1;
+        break;
+      case 5:
+        red_click_buffer += 1;
+        break;
+      case 8:
+        rotation_buffer -= 1;
+        break;
+      case 9:
+        rotation_buffer += 1;
+        break;
+    }
+  }
+}
+
+void reconnectWifi() {
+  WiFi.disconnect();
+
+  DEBUG_PRINT("Connecting to WiFi ");
+  DEBUG_PRINTLN(SSID);
+
+  WiFi.begin(SSID, PASSWORD);
+  delay(50);
+
+  // below does not work as expected, so ignore for now
+  // while (WiFi.status() != WL_CONNECTED) {
+  //   delay(500);
+  //   DEBUG_PRINT(".");
+  // }
 
   // don't use a root cert
   wfcs.setInsecure();
+  delay(10);
 
-  // log wifi info
-  Serial.println();
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-
-  refresh();
-
-  Serial.println("all set up, nothing more");
-}
-
-void loop() {
-  button_state = digitalRead(d0_pin);
-  if (button_state != previous_d0) {
-    if (button_state == LOW) {
-      // button press
-      Serial.println("d0 click");
-      esp_deep_sleep_start();
-      return;
-    }
-    previous_d0 = button_state;
-  }
-
-  button_state = digitalRead(d1_pin);
-  if (button_state != previous_d1) {
-    if (button_state == HIGH) {
-      // button press
-      Serial.println("d1 click");
-      drawBigText("d1");
-      toggleLiked();
-    } else {
-      tft.fillScreen(ST77XX_BLACK);
-    }
-    previous_d1 = button_state;
-  }
-
-  button_state = digitalRead(d2_pin);
-  if (button_state != previous_d2) {
-    if (button_state == HIGH) {
-      // button press
-      Serial.println("d2 click");
-      drawBigText("d2");
-      struct TrackInfo info = getTrackInfo();
-      seek(info.progress_ms - 16000);  // go back 16 seconds
-    } else {
-      tft.fillScreen(ST77XX_BLACK);
-    }
-    previous_d2 = button_state;
-  }
-
-  delay(50);  // debounce
-}
-
-void drawBigText(char *text) {
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setCursor(0, 0);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setTextWrap(true);
-  tft.setTextSize(6);
-  tft.print(text);
-}
-
-void testfastlines(uint16_t color1, uint16_t color2) {
-  tft.fillScreen(ST77XX_BLACK);
-  for (int16_t y = 0; y < tft.height(); y += 5) {
-    tft.drawFastHLine(0, y, tft.width(), color1);
-  }
-  for (int16_t x = 0; x < tft.width(); x += 5) {
-    tft.drawFastVLine(x, 0, tft.height(), color2);
-  }
-}
-
-void testdrawrects(uint16_t color) {
-  tft.fillScreen(ST77XX_BLACK);
-  for (int16_t x = 0; x < tft.width(); x += 6) {
-    tft.drawRect(tft.width() / 2 - x / 2, tft.height() / 2 - x / 2, x, x,
-                 color);
-  }
-}
-
-void testfillrects(uint16_t color1, uint16_t color2) {
-  tft.fillScreen(ST77XX_BLACK);
-  for (int16_t x = tft.width() - 1; x > 6; x -= 6) {
-    tft.fillRect(tft.width() / 2 - x / 2, tft.height() / 2 - x / 2, x, x,
-                 color1);
-    tft.drawRect(tft.width() / 2 - x / 2, tft.height() / 2 - x / 2, x, x,
-                 color2);
-  }
+  DEBUG_PRINT("addr: ");
+  DEBUG_PRINTLN(WiFi.localIP());
 }
 
 // input: a string like "access_token":"...","refresh_token":"...","expires_in":3600}
-struct TokenData parseTokenPayload(String buffer) {
+void setCredentials(String buffer) {
+  static char access_token_buf[MAX_TOKEN_LENGTH];
+  static char refresh_token_buf[MAX_TOKEN_LENGTH];
+
   int start = buffer.indexOf("access_token");
-  String access_token = buffer.substring(start + 15);
-  int end = access_token.indexOf("\"");
-  access_token = access_token.substring(0, end);
+  String access_str = buffer.substring(start + 15);
+  int end = access_str.indexOf("\"");
+  access_str = access_str.substring(0, end);
+  access_str.toCharArray(access_token_buf, MAX_TOKEN_LENGTH);
 
   start = buffer.indexOf("refresh_token");
-  String refresh_token = credentials.refresh_token;
   if (start >= 0) {
-    String refresh_token = buffer.substring(start + 16);
-    end = refresh_token.indexOf("\"");
-    refresh_token = refresh_token.substring(0, end);
+    String refresh_str = buffer.substring(start + 16);
+    end = refresh_str.indexOf("\"");
+    refresh_str = refresh_str.substring(0, end);
+    refresh_str.toCharArray(refresh_token_buf, MAX_TOKEN_LENGTH);
+  } else {
+    strcpy(refresh_token_buf, REFRESH_TOKEN);
   }
 
-  start = buffer.indexOf("expires_in");
-  String expires_in = buffer.substring(start + 12);
-  end = expires_in.indexOf("\"");
-  if (end < 0) {
-    end = expires_in.indexOf("}");
+  int expires_start = buffer.indexOf("expires_in");
+  String expires_str = buffer.substring(expires_start + 12);
+  int expires_end = expires_str.indexOf("\"");
+  if (expires_end < 0) {
+    expires_end = expires_str.indexOf("}");
   }
-  expires_in = expires_in.substring(0, end);
+  expires_str = expires_str.substring(0, expires_end);
 
   // expires at now + expires_in - 5 minutes
-  int expires_at = millis() + (expires_in.toInt() * 1000) - 300000;
+  int expires_at = millis() + (expires_str.toInt() * 1000) - 300000;
 
-  return { access_token, refresh_token, expires_at };
+  credentials.access_token = access_token_buf;
+  credentials.refresh_token = refresh_token_buf;
+  credentials.expires_at = expires_at;
+
+  return;
 }
 
+// refresh credentials (get a new access_token, and possibly also refresh_token)
 void refresh() {
-  Serial.println("refreshing...");
+  DEBUG_PRINTLN("refreshing...");
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("refresh() failed: Wifi not connected");
+    DEBUG_PRINTLN("refresh() failed: Wifi not connected");
     return;
   }
 
   // can test POST to https://www.httpbin.org/post, but must include a body (add `http.println("key=value");` after `wfcs.println();` and update Content-Length)
 
   if (wfcs.connect("accounts.spotify.com", 443)) {
-    String params = String("grant_type=refresh_token&client_id=") + CLIENT_ID + "&client_secret=" + CLIENT_SECRET + "&refresh_token=" + credentials.refresh_token;
 
-    wfcs.println("POST /api/token?" + params + " HTTP/1.1");
-    wfcs.println("Host: accounts.spotify.com");
-    wfcs.println("Content-Type: application/x-www-form-urlencoded");
-    wfcs.println("Content-Length: 0");
-    wfcs.println();
+    wfcs.write("POST /api/token?grant_type=refresh_token&client_id=");
+    wfcs.write(CLIENT_ID);
+    wfcs.write("&client_secret=");
+    wfcs.write(CLIENT_SECRET);
+    wfcs.write("&refresh_token=");
+    wfcs.write(credentials.refresh_token);
+    wfcs.write(" HTTP/1.1\r\n");
+    wfcs.write("Host: accounts.spotify.com\r\n");
+    wfcs.write("Content-Type: application/x-www-form-urlencoded\r\n");
+    wfcs.write("Content-Length: 0\r\n\r\n");
 
     int i = 0;
     int step = 0;
@@ -295,63 +471,37 @@ void refresh() {
     wfcs.stop();
     String payload = String(buffer);
 
-    if (step != 3) {
-      Serial.println(payload);
-      Serial.println(i);
-      Serial.println(step);
-      Serial.println("refresh() failed: payload not found");
-      return;
-    }
-
-    credentials = parseTokenPayload(payload);
+    setCredentials(payload);
 
     return;
   } else {
-    Serial.println("refresh() failed: couldn't connect");
+    DEBUG_PRINTLN("refresh() failed: couldn't connect");
   }
 
   return;
 }
 
+// call refresh() if credentials expired
 void refresh_if_expired() {
   if (credentials.expires_at < millis()) {
     refresh();
   }
 }
 
-// this was just for testing
-void nextSong() {
-  Serial.println("next song...");
-  refresh_if_expired();
+// get info related to the currently playing track (if any)
+void getCurrentTrackInfo() {
+  static char track_id_buf[MAX_TRACK_ID_LENGTH];
+  memset(track_id_buf, 0, MAX_TRACK_ID_LENGTH);
+
+  DEBUG_PRINTLN("track info...");
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("nextSong() failed: Wifi not connected");
+    DEBUG_PRINTLN("getCurrentTrackInfo() failed: Wifi not connected");
+    info.id = "";
     return;
   }
 
-  if (wfcs.connect("api.spotify.com", 443)) {
-    wfcs.println("POST /v1/me/player/next HTTP/1.1");
-    wfcs.println("Host: api.spotify.com");
-    wfcs.print("Authorization: Bearer ");
-    wfcs.println(credentials.access_token);
-    wfcs.println("Content-Length: 0");
-    wfcs.println();
-    // ignore any response
-    wfcs.stop();
-  } else {
-    Serial.println("nextSong() failed: couldn't connect");
-  }
-}
-
-struct TrackInfo getTrackInfo() {
-  Serial.println("track info...");
   refresh_if_expired();
-  struct TrackInfo err_resp = { "", 0, 0 };
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("trackInfo() failed: Wifi not connected");
-    return err_resp;
-  }
 
   if (wfcs.connect("api.spotify.com", 443)) {
     wfcs.println("GET /v1/me/player/currently-playing HTTP/1.1");
@@ -363,11 +513,12 @@ struct TrackInfo getTrackInfo() {
     int step_id = 0;
     int step_pm = 0;
     int step_dm = 0;
-    String id = "";
-    String progress_ms = "";
-    String duration_ms = "";
     unsigned long startMillis = millis();
     int count = 0;
+
+    track_id = "";
+    track_progress_ms = "";
+    track_duration_ms = "";
 
     while (startMillis + 5000 > millis() && (step_id >= 0 || step_pm >= 0 || step_dm >= 0)) {
       while (wfcs.available()) {
@@ -476,7 +627,7 @@ struct TrackInfo getTrackInfo() {
             if (c == '"') {
               step_id = -1;
             } else {
-              id += c;
+              track_id += c;
             }
             break;
         }
@@ -573,13 +724,13 @@ struct TrackInfo getTrackInfo() {
             break;
           case 13:
             if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
-              progress_ms += c;
+              track_progress_ms += c;
               step_pm = 14;
             }
             break;
           case 14:
             if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
-              progress_ms += c;
+              track_progress_ms += c;
             } else {
               step_pm = -1;
             }
@@ -678,13 +829,13 @@ struct TrackInfo getTrackInfo() {
             break;
           case 13:
             if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
-              duration_ms += c;
+              track_duration_ms += c;
               step_dm = 14;
             }
             break;
           case 14:
             if (c == '0' || c == '1' || c == '2' || c == '3' || c == '4' || c == '5' || c == '6' || c == '7' || c == '8' || c == '9') {
-              duration_ms += c;
+              track_duration_ms += c;
             } else {
               step_dm = -1;
             }
@@ -695,52 +846,71 @@ struct TrackInfo getTrackInfo() {
 
     wfcs.stop();
 
-    return { id, duration_ms.toInt(), progress_ms.toInt() };
+    track_id.toCharArray(track_id_buf, MAX_TRACK_ID_LENGTH);
+
+    info.id = track_id_buf;
+    info.duration_ms = track_duration_ms.toInt();
+    info.progress_ms = track_progress_ms.toInt();
+    return;
   } else {
-    Serial.println("trackInfo() failed: couldn't connect");
+    DEBUG_PRINTLN("getCurrentTrackInfo() failed: couldn't connect");
   }
 
-  return err_resp;
+  return;
 }
 
+// go to a specific ms in the current track
 void seek(int ms) {
-  Serial.print("seek ");
-  Serial.print(ms);
-  Serial.println("...");
+  DEBUG_PRINT("seek ");
+  DEBUG_PRINT(ms);
+  DEBUG_PRINTLN("...");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("seek() failed: Wifi not connected");
+    return;
+  }
+
   refresh_if_expired();
+
   if (ms < 0) {
     ms = 0;
   }
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("seek() failed: Wifi not connected");
-    return;
-  }
-
   if (wfcs.connect("api.spotify.com", 443)) {
-    wfcs.println(String("PUT /v1/me/player/seek?position_ms=") + String(ms) + " HTTP/1.1");
-    wfcs.println("Host: api.spotify.com");
-    wfcs.print("Authorization: Bearer ");
-    wfcs.println(credentials.access_token);
-    wfcs.println("Content-Length: 0");
-    wfcs.println();
+    char ms_buf[16];  // if the song is longer than this, good luck
+
+    wfcs.write("PUT /v1/me/player/seek?position_ms=");
+    wfcs.write(itoa(ms, ms_buf, 10));
+    wfcs.write(" HTTP/1.1\r\n");
+    wfcs.write("Host: api.spotify.com\r\n");
+    wfcs.write("Authorization: Bearer ");
+    wfcs.write(credentials.access_token);
+    wfcs.write("\r\n");
+    wfcs.write("Content-Length: 0\r\n\r\n");
     // ignore any response
 
     wfcs.stop();
   } else {
-    Serial.println("nextSong() failed: couldn't connect");
+    DEBUG_PRINTLN("seek() failed: couldn't connect");
   }
 }
 
-void toggleLiked() {
-  Serial.println("toggle liked...");
+// true = current track is already liked
+// false = current track is not already liked
+bool trackAlreadyLiked() {
+  DEBUG_PRINTLN("track already liked...");
 
-  // get current track (getTrackInfo())
-  struct TrackInfo info = getTrackInfo();
   if (info.id == "") {
-    Serial.println("toggleLiked() failed: no track id");
-    return;
+    DEBUG_PRINTLN("trackAlreadyLiked() failed: no track id");
+    return false;
   }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("trackAlreadyLiked() failed: Wifi not connected");
+    return false;
+  }
+
+  refresh_if_expired();
 
   bool alreadyLiked = false;
   // check user's saved tracks (GET https://api.spotify.com/v1/me/tracks/contains?ids=...)
@@ -809,34 +979,115 @@ void toggleLiked() {
 
     wfcs.stop();
   } else {
-    Serial.println("toggleLiked() failed: couldn't connect (0)");
+    DEBUG_PRINTLN("trackAlreadyLiked() failed: couldn't connect (0)");
   }
 
-  if (alreadyLiked) {
-    if (wfcs.connect("api.spotify.com", 443)) {
-      wfcs.println(String("DELETE /v1/me/tracks?ids=") + info.id + " HTTP/1.1");
-      wfcs.println("Host: api.spotify.com");
-      wfcs.print("Authorization: Bearer ");
-      wfcs.println(credentials.access_token);
-      wfcs.println("Content-Length: 0");
-      wfcs.println();
-      // ignore response
-      wfcs.stop();
-    } else {
-      Serial.println("toggleLiked() failed: couldn't connect (1)");
-    }
+  return alreadyLiked;
+}
+
+// unlike the current track
+void unlikeTrack() {
+  DEBUG_PRINTLN("unlike track...");
+
+  if (info.id == "") {
+    DEBUG_PRINTLN("unlikeTrack() failed: no track id");
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("unlikeTrack() failed: Wifi not connected");
+    return;
+  }
+
+  refresh_if_expired();
+
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println(String("DELETE /v1/me/tracks?ids=") + info.id + " HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println("Content-Length: 0");
+    wfcs.println();
+    // ignore response
+    wfcs.stop();
   } else {
-    if (wfcs.connect("api.spotify.com", 443)) {
-      wfcs.println(String("PUT /v1/me/tracks?ids=") + info.id + " HTTP/1.1");
-      wfcs.println("Host: api.spotify.com");
-      wfcs.print("Authorization: Bearer ");
-      wfcs.println(credentials.access_token);
-      wfcs.println("Content-Length: 0");
-      wfcs.println();
-      // ignore response
-      wfcs.stop();
-    } else {
-      Serial.println("toggleLiked() failed: couldn't connect (2)");
-    }
+    DEBUG_PRINTLN("unlikeTrack() failed: couldn't connect (1)");
   }
 }
+
+// like the current track
+void likeTrack() {
+  DEBUG_PRINTLN("like track...");
+
+  if (info.id == "") {
+    DEBUG_PRINTLN("likeTrack() failed: no track id");
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("likeTrack() failed: Wifi not connected");
+    return;
+  }
+
+  refresh_if_expired();
+
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println(String("PUT /v1/me/tracks?ids=") + info.id + " HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println("Content-Length: 0");
+    wfcs.println();
+    // ignore response
+    wfcs.stop();
+  } else {
+    DEBUG_PRINTLN("likeTrack() failed: couldn't connect (2)");
+  }
+}
+
+// set playback volume
+void setVolume(int vp) {
+  DEBUG_PRINT("set volume ");
+  DEBUG_PRINT(vp);
+  DEBUG_PRINTLN("...");
+
+  if (vp < 0) {
+    vp = 0;
+  } else if (vp > 100) {
+    vp = 100;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("setVolume() failed: Wifi not connected");
+    return;
+  }
+
+  refresh_if_expired();
+
+  // :(
+  /*
+  {
+    "error": {
+        "status": 403,
+        "message": "Player command failed: Cannot control device volume",
+        "reason": "VOLUME_CONTROL_DISALLOW"
+    }
+  }
+  */
+
+  if (wfcs.connect("api.spotify.com", 443)) {
+    wfcs.println(String("PUT /v1/me/player/volume?volume_percent=") + vp + " HTTP/1.1");
+    wfcs.println("Host: api.spotify.com");
+    wfcs.print("Authorization: Bearer ");
+    wfcs.println(credentials.access_token);
+    wfcs.println("Content-Length: 0");
+    wfcs.println();
+    // ignore response
+    wfcs.stop();
+  } else {
+    DEBUG_PRINTLN("setVolume() failed: couldn't connect (2)");
+  }
+}
+
+// can get current volume from playback state
+// https://api.spotify.com/v1/me/player
